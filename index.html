@@ -216,12 +216,13 @@ function gen(s){
       }
       if(t===K){
         if(w && from===4){
-          if((s.castle&1) && !b[5] && !b[6] && !attacked(s,5,false) && !attacked(s,6,false) && b[7]===R) out.push({from,to:6,castle:1});
-          if((s.castle&2) && !b[3] && !b[2] && !b[1] && !attacked(s,3,false) && !attacked(s,2,false) && b[0]===R) out.push({from,to:2,castle:2});
+          /* also illegal: castling while the king stands in check */
+          if((s.castle&1) && !b[5] && !b[6] && !inCheck(s) && !attacked(s,5,false) && !attacked(s,6,false) && b[7]===R) out.push({from,to:6,castle:1});
+          if((s.castle&2) && !b[3] && !b[2] && !b[1] && !inCheck(s) && !attacked(s,3,false) && !attacked(s,2,false) && b[0]===R) out.push({from,to:2,castle:2});
         }
         if(!w && from===116){
-          if((s.castle&4) && !b[117] && !b[118] && !attacked(s,117,true) && !attacked(s,118,true) && b[119]===-R) out.push({from,to:118,castle:4});
-          if((s.castle&8) && !b[115] && !b[114] && !b[113] && !attacked(s,115,true) && !attacked(s,114,true) && b[112]===-R) out.push({from,to:114,castle:8});
+          if((s.castle&4) && !b[117] && !b[118] && !inCheck(s) && !attacked(s,117,true) && !attacked(s,118,true) && b[119]===-R) out.push({from,to:118,castle:4});
+          if((s.castle&8) && !b[115] && !b[114] && !b[113] && !inCheck(s) && !attacked(s,115,true) && !attacked(s,114,true) && b[112]===-R) out.push({from,to:114,castle:8});
         }
       }
     } else {
@@ -279,8 +280,10 @@ function unmake(s, m, u){
 function legal(s){
   const out = [];
   for(const m of gen(s)){
+    const mover = s.w;               /* make() flips the turn */
     const u = make(s, m);
-    if(!inCheck(s)) out.push(m);
+    const k = kingSq(s, mover);
+    if(k >= 0 && !attacked(s, k, !mover)) out.push(m);
     unmake(s, m, u);
   }
   return out;
@@ -315,8 +318,10 @@ function quiesce(s, a, be, ply){
   if(stand > a) a = stand;
   if(ply > 6) return a;
   for(const m of order(s, gen(s).filter(m => s.b[m.to] || m.ep || m.promo))){
+    const mover = s.w;
     const u = make(s, m);
-    if(inCheck(s)){ unmake(s,m,u); continue; }
+    const k = kingSq(s, mover);
+    if(k < 0 || attacked(s, k, !mover)){ unmake(s,m,u); continue; }
     const sc = -quiesce(s, -be, -a, ply+1);
     unmake(s, m, u);
     if(sc >= be) return be;
@@ -407,7 +412,7 @@ self.onmessage = e => {
     postMessage({id, san: theSan, fen: toFEN(s)});
   } else if(cmd === "search"){
     const r = search(s, depth);
-    if(!r){ postMessage({id, none:true}); return; }
+    if(!r){ postMessage({id, none:true, check: inCheck(s)}); return; }
     const ms = legal(s);
     const theSan = san(s, r.move, ms);
     const u = make(s, r.move);
@@ -425,7 +430,7 @@ self.onmessage = e => {
 const cv = document.getElementById("bd"), cx = cv.getContext("2d");
 const S = 80;
 const workerSrc = document.getElementById("eng").textContent;
-const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], {type:"text/javascript"})));
+let worker = null;
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 /* U+FE0E forces text (non-emoji) presentation, so fillStyle decides the color */
 const GLYPH = {1:"♟︎",2:"♞︎",3:"♝︎",4:"♜︎",5:"♛︎",6:"♚︎"};
@@ -433,17 +438,31 @@ let fen = START, youWhite = true, busy = false;
 let sel = -1, targets = [], history = [], sanList = [];
 let reqId = 0; const pending = new Map();
 
+/* worldGen invalidates every in-flight reply when the game is reset:
+   a search launched before NEW GAME / UNDO must never land afterwards,
+   or stale engine state gets applied to a fresh board */
+let worldGen = 0;
+function spawnWorker(){
+  if(worker) worker.terminate();
+  pending.clear();
+  worker = new Worker(URL.createObjectURL(new Blob([workerSrc], {type:"text/javascript"})));
+  worker.onmessage = e => {
+    const p = pending.get(e.data.id);
+    if(!p) return;
+    pending.delete(e.data.id);
+    if(p.g !== worldGen) return;   /* stale — the world moved on */
+    p.res(e.data);
+  };
+}
+spawnWorker();
 function ask(msg){
+  const g = worldGen;
   return new Promise(res => {
     const id = ++reqId;
-    pending.set(id, res);
+    pending.set(id, {res, g});
     worker.postMessage({id, ...msg});
   });
 }
-worker.onmessage = e => {
-  const p = pending.get(e.data.id);
-  if(p){ pending.delete(e.data.id); p(e.data); }
-};
 
 const dSq = (df, dr) => {
   const file = youWhite ? df : 7-df;
@@ -548,7 +567,11 @@ async function refresh(){
     thinkEl.textContent = "…";
     const a = await ask({cmd:"search", fen, depth});
     busy = false;
-    if(a.none){ status.textContent = "the engine has nothing to play."; return; }
+    if(a.none){
+      status.textContent = a.check ? "checkmate — you win this one."
+                                   : "stalemate — nobody wins.";
+      return;
+    }
     thinkEl.textContent = a.san + "  (score " + (a.score/100).toFixed(2) + ")";
     history.push(fen);
     fen = a.fen;
@@ -591,19 +614,23 @@ cv.addEventListener("pointerdown", async e => {
 });
 
 document.getElementById("new").onclick = () => {
+  worldGen++; spawnWorker();          /* kill any search in flight */
+  busy = false;
   fen = START; history = []; sanList = []; sel = -1; targets = [];
   youWhite = document.getElementById("side").value === "w";
   status.textContent = "your move."; thinkEl.textContent = "";
   renderMoves(); refresh();
 };
 document.getElementById("undo").onclick = () => {
-  if(!history.length || busy) return;
+  if(!history.length) return;
+  worldGen++; spawnWorker();          /* kill any search in flight */
+  busy = false;
   const playerTurn = youWhite ? "w" : "b";
   while(history.length){
     fen = history.pop(); sanList.pop();
     if(fen.split(" ")[1] === playerTurn) break;
   }
-  sel = -1; targets = []; busy = false; thinkEl.textContent = "";
+  sel = -1; targets = []; thinkEl.textContent = "";
   renderMoves(); refresh();
 };
 
