@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zvorn</title>
+<style>
+:root{ --paper:#efe6d0; --ink:#2a2419; --dim:#8a7d63; --line:#b9a985;
+  --red:#a63a24; --board-d:#8a6d43; --board-l:#d9c79c; }
+html,body{margin:0;background:#232019;color:var(--ink);
+  font:15px/1.5 Georgia,'Times New Roman',serif}
+#desk{max-width:860px;margin:26px auto;padding:26px 28px 30px;
+  background:var(--paper);border-radius:3px;
+  box-shadow:0 30px 70px rgba(0,0,0,.6), inset 0 0 60px rgba(120,95,50,.12)}
+#mast{display:flex;justify-content:space-between;align-items:baseline;
+  border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:16px}
+#mast h1{margin:0;font-size:26px;font-weight:normal;letter-spacing:.42em}
+#mast h1 b{font-weight:normal;color:var(--red)}
+#mast .no{font-size:11px;color:var(--dim);letter-spacing:.2em;font-family:ui-monospace,Menlo,monospace}
+#stage{display:flex;gap:22px;flex-wrap:wrap}
+#left{flex:1;min-width:300px}
+#bd{width:100%;aspect-ratio:1;touch-action:manipulation;cursor:pointer;
+  box-shadow:0 4px 18px rgba(0,0,0,.35);border:2px solid var(--ink)}
+#right{width:230px;display:flex;flex-direction:column;gap:14px}
+.box{border:1px solid var(--line);padding:10px 12px;background:rgba(255,255,255,.25)}
+.box h2{margin:0 0 6px;font-size:10px;letter-spacing:.3em;color:var(--dim);
+  font-family:ui-monospace,Menlo,monospace;font-weight:normal}
+#moves{height:220px;overflow-y:auto;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;
+  line-height:1.7;color:var(--ink)}
+#moves i{color:var(--dim);font-style:normal;margin-right:6px}
+#status{font-style:italic;color:var(--red);min-height:1.5em}
+.controls{display:flex;gap:8px;flex-wrap:wrap}
+button{font:12px ui-monospace,Menlo,monospace;letter-spacing:.12em;color:var(--ink);
+  background:var(--paper);border:1px solid var(--ink);padding:7px 12px;cursor:pointer}
+button:active{background:var(--ink);color:var(--paper)}
+select{font:12px ui-monospace,Menlo,monospace;background:var(--paper);
+  border:1px solid var(--ink);padding:6px;color:var(--ink)}
+#think{font-size:10px;color:var(--dim);font-family:ui-monospace,Menlo,monospace;min-height:1.4em}
+#foot{margin-top:18px;border-top:1px solid var(--line);padding-top:10px;
+  font-size:12px;color:var(--dim);font-style:italic}
+</style>
+</head>
+<body>
+<div id="desk">
+  <div id="mast"><h1>ZVORN <b>&amp;</b> CO.</h1><div class="no">SET No. 3 — THE ENGINE PLAYS</div></div>
+  <div id="stage">
+    <div id="left">
+      <canvas id="bd" width="640" height="640"></canvas>
+    </div>
+    <div id="right">
+      <div class="box"><h2>STATE</h2><div id="status">your move.</div></div>
+      <div class="box"><h2>NOTATION</h2><div id="moves"></div></div>
+      <div class="box">
+        <h2>CONTROL</h2>
+        <div class="controls">
+          <button id="new">NEW GAME</button>
+          <button id="undo">UNDO</button>
+        </div>
+        <div class="controls" style="margin-top:8px">
+          <select id="side"><option value="w">you play white</option><option value="b">you play black</option></select>
+          <select id="depth"><option value="2">shallow</option><option value="4" selected>pensive</option><option value="5">deep</option></select>
+        </div>
+        <div id="think" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+  <div id="foot">every piece, every move, every judgement is computed on this page.
+    the engine thinks in a worker so the board never stutters.</div>
+</div>
+
+<script id="eng" type="text/plain">
+"use strict";
+/* engine — 0x88 board, negamax + alpha-beta + quiescence.
+   speaks FEN in, FEN + SAN out. */
+const P=1,N=2,B=3,R=4,Q=5,K=6;
+const KN=[31,33,14,18,-31,-33,-14,-18];
+const KG=[1,-1,16,-16,15,17,-15,-17];
+const BI=[15,17,-15,-17], RK=[1,-1,16,-16];
+const VAL=[0,100,320,330,500,900,20000];
+
+const PST = {
+  1:[0,0,0,0,0,0,0,0, 50,50,50,50,50,50,50,50, 10,10,20,30,30,20,10,10,
+     5,5,10,25,25,10,5,5, 0,0,0,20,20,0,0,0, 5,-5,-10,0,0,-10,-5,5,
+     5,10,10,-20,-20,10,10,5, 0,0,0,0,0,0,0,0],
+  2:[-50,-40,-30,-30,-30,-30,-40,-50, -40,-20,0,0,0,0,-20,-40,
+     -30,0,10,15,15,10,0,-30, -30,5,15,20,20,15,5,-30,
+     -30,0,15,20,20,15,0,-30, -30,5,10,15,15,10,5,-30,
+     -40,-20,0,5,5,0,-20,-40, -50,-40,-30,-30,-30,-30,-40,-50],
+  3:[-20,-10,-10,-10,-10,-10,-10,-20, -10,0,0,0,0,0,0,-10,
+     -10,0,5,10,10,5,0,-10, -10,5,5,10,10,5,5,-10,
+     -10,0,10,10,10,10,0,-10, -10,10,10,10,10,10,10,-10,
+     -10,5,0,0,0,0,5,-10, -20,-10,-10,-10,-10,-10,-10,-20],
+  4:[0,0,0,0,0,0,0,0, 5,10,10,10,10,10,10,5, -5,0,0,0,0,0,0,-5,
+     -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5,
+     -5,0,0,0,0,0,0,-5, 0,0,0,5,5,0,0,0],
+  5:[-20,-10,-10,-5,-5,-10,-10,-20, -10,0,0,0,0,0,0,-10,
+     -10,0,5,5,5,5,0,-10, -5,0,5,5,5,5,0,-5, 0,0,5,5,5,5,0,-5,
+     -10,5,5,5,5,5,0,-10, -10,0,5,0,0,0,0,-10, -20,-10,-10,-5,-5,-10,-10,-20],
+  6:[-30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
+     -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
+     -20,-30,-30,-40,-40,-30,-30,-20, -10,-20,-20,-20,-20,-20,-20,-10,
+     20,20,0,0,0,0,20,20, 20,30,10,0,0,10,30,20]
+};
+
+function parse(fen){
+  const [pos, turn, cast, ep, half] = fen.split(" ");
+  const b = new Int8Array(128);
+  const rows = pos.split("/");
+  for(let row=0; row<8; row++){
+    const r = 7-row; let f = 0;
+    for(const ch of rows[row]){
+      if(ch >= "1" && ch <= "8"){ f += +ch; continue; }
+      const t = {p:P,n:N,b:B,r:R,q:Q,k:K}[ch.toLowerCase()];
+      b[r*16+f] = ch === ch.toLowerCase() ? -t : t;
+      f++;
+    }
+  }
+  let castle = 0;
+  if(cast.includes("K")) castle|=1; if(cast.includes("Q")) castle|=2;
+  if(cast.includes("k")) castle|=4; if(cast.includes("q")) castle|=8;
+  let epsq = -1;
+  if(ep && ep !== "-"){
+    const fl = ep.charCodeAt(0)-97, rk = +ep[1]-1;
+    epsq = rk*16+fl;
+  }
+  return {b, w: turn==="w", castle, epsq, half: +half||0};
+}
+function toFEN(s){
+  let out = "";
+  for(let row=0; row<8; row++){
+    const r = 7-row; let empty = 0;
+    for(let f=0; f<8; f++){
+      const p = s.b[r*16+f];
+      if(!p){ empty++; continue; }
+      if(empty){ out += empty; empty = 0; }
+      const ch = " pnbrqk"[Math.abs(p)];
+      out += p > 0 ? ch.toUpperCase() : ch;
+    }
+    if(empty) out += empty;
+    if(row<7) out += "/";
+  }
+  let c = "";
+  if(s.castle&1)c+="K"; if(s.castle&2)c+="Q"; if(s.castle&4)c+="k"; if(s.castle&8)c+="q";
+  const ep = s.epsq >= 0 ? String.fromCharCode(97+(s.epsq&7)) + (1+(s.epsq>>4)) : "-";
+  return out + " " + (s.w?"w":"b") + " " + (c||"-") + " " + ep + " " + s.half + " 1";
+}
+
+function attacked(s, sq, byWhite){
+  const b = s.b;
+  for(const d of (byWhite ? [-15,-17] : [15,17])){
+    const f = sq+d;
+    if(!(f&0x88) && b[f] === (byWhite?P:-P)) return true;
+  }
+  for(const d of KN){ const f = sq+d; if(!(f&0x88) && b[f]===(byWhite?N:-N)) return true; }
+  for(const d of KG){ const f = sq+d; if(!(f&0x88) && b[f]===(byWhite?K:-K)) return true; }
+  for(const d of BI){
+    let f = sq+d;
+    while(!(f&0x88)){
+      const p = b[f];
+      if(p){ if(p===(byWhite?B:-B)||p===(byWhite?Q:-Q)) return true; break; }
+      f += d;
+    }
+  }
+  for(const d of RK){
+    let f = sq+d;
+    while(!(f&0x88)){
+      const p = b[f];
+      if(p){ if(p===(byWhite?R:-R)||p===(byWhite?Q:-Q)) return true; break; }
+      f += d;
+    }
+  }
+  return false;
+}
+const kingSq = (s,white) => {
+  const t = white?K:-K;
+  for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const sq=r*16+f; if(s.b[sq]===t) return sq; }
+  return -1;
+};
+const inCheck = (s) => attacked(s, kingSq(s, s.w), !s.w);
+
+function gen(s){
+  const b = s.b, out = [], w = s.w;
+  for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+    const from = r*16+f, p = b[from];
+    if(!p || (p>0) !== w) continue;
+    const t = Math.abs(p);
+    if(t===P){
+      const sign = w?1:-1;
+      const one = from+16*sign;
+      const promo = (w ? r===6 : r===1);
+      if(!(one&0x88) && !b[one]){
+        if(promo){ for(const pr of [Q,N,R,B]) out.push({from,to:one,promo:pr}); }
+        else out.push({from,to:one});
+        const home = w ? r===1 : r===6;
+        const two = from+32*sign;
+        if(home && !b[two]) out.push({from,to:two,dbl:true});
+      }
+      for(const d of [15*sign, 17*sign]){
+        const to = from+d;
+        if(to&0x88) continue;
+        if(b[to] && (b[to]>0) !== w){
+          if(promo){ for(const pr of [Q,N,R,B]) out.push({from,to,promo:pr}); }
+          else out.push({from,to});
+        } else if(to === s.epsq && !b[to]){
+          out.push({from,to,ep:true});
+        }
+      }
+    } else if(t===N || t===K){
+      for(const d of (t===N?KN:KG)){
+        const to = from+d;
+        if(to&0x88) continue;
+        if(!b[to] || (b[to]>0)!==w) out.push({from,to});
+      }
+      if(t===K){
+        if(w && from===4){
+          if((s.castle&1) && !b[5] && !b[6] && !attacked(s,5,false) && !attacked(s,6,false) && b[7]===R) out.push({from,to:6,castle:1});
+          if((s.castle&2) && !b[3] && !b[2] && !b[1] && !attacked(s,3,false) && !attacked(s,2,false) && b[0]===R) out.push({from,to:2,castle:2});
+        }
+        if(!w && from===116){
+          if((s.castle&4) && !b[117] && !b[118] && !attacked(s,117,true) && !attacked(s,118,true) && b[119]===-R) out.push({from,to:118,castle:4});
+          if((s.castle&8) && !b[115] && !b[114] && !b[113] && !attacked(s,115,true) && !attacked(s,114,true) && b[112]===-R) out.push({from,to:114,castle:8});
+        }
+      }
+    } else {
+      const dirs = t===B?BI : t===R?RK : BI.concat(RK);
+      for(const d of dirs){
+        let to = from+d;
+        while(!(to&0x88)){
+          if(!b[to]) out.push({from,to});
+          else { if((b[to]>0)!==w) out.push({from,to}); break; }
+          to += d;
+        }
+      }
+    }
+  }
+  return out;
+}
+function make(s, m){
+  const b = s.b;
+  const undo = {cap: b[m.to], castle: s.castle, epsq: s.epsq, half: s.half, epcap: 0};
+  s.epsq = -1;
+  const p = b[m.from];
+  b[m.from] = 0;
+  if(m.ep){ const capSq = m.to + (s.w ? -16 : 16); undo.epcap = b[capSq]; b[capSq] = 0; }
+  b[m.to] = m.promo ? (s.w?m.promo:-m.promo) : p;
+  if(m.dbl) s.epsq = m.from + (s.w?16:-16);
+  if(m.castle){
+    if(m.castle===1){ b[5]=b[7]; b[7]=0; }
+    if(m.castle===2){ b[3]=b[0]; b[0]=0; }
+    if(m.castle===4){ b[117]=b[119]; b[119]=0; }
+    if(m.castle===8){ b[115]=b[112]; b[112]=0; }
+  }
+  if(Math.abs(p)===K){ s.castle &= s.w ? ~3 : ~12; }
+  if(m.from===7||m.to===7) s.castle &= ~1;
+  if(m.from===0||m.to===0) s.castle &= ~2;
+  if(m.from===119||m.to===119) s.castle &= ~4;
+  if(m.from===112||m.to===112) s.castle &= ~8;
+  s.half = (Math.abs(p)===P || undo.cap || m.ep) ? 0 : s.half+1;
+  s.w = !s.w;
+  return undo;
+}
+function unmake(s, m, u){
+  const b = s.b;
+  s.w = !s.w;
+  b[m.from] = m.promo ? (s.w?P:-P) : b[m.to];
+  b[m.to] = u.cap;
+  if(m.ep){ b[m.to + (s.w?-16:16)] = u.epcap; }
+  if(m.castle){
+    if(m.castle===1){ b[7]=b[5]; b[5]=0; }
+    if(m.castle===2){ b[0]=b[3]; b[3]=0; }
+    if(m.castle===4){ b[119]=b[117]; b[117]=0; }
+    if(m.castle===8){ b[112]=b[115]; b[115]=0; }
+  }
+  s.castle = u.castle; s.epsq = u.epsq; s.half = u.half;
+}
+function legal(s){
+  const out = [];
+  for(const m of gen(s)){
+    const u = make(s, m);
+    if(!inCheck(s)) out.push(m);
+    unmake(s, m, u);
+  }
+  return out;
+}
+
+function evalPos(s){
+  let sc = 0;
+  for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+    const sq = r*16+f, p = s.b[sq];
+    if(!p) continue;
+    const t = Math.abs(p);
+    if(p > 0) sc += VAL[t] + PST[t][(7-r)*8+f];
+    else      sc -= VAL[t] + PST[t][r*8+f];
+  }
+  return s.w ? sc : -sc;
+}
+
+const MATE = 100000;
+function order(s, moves){
+  for(const m of moves){
+    m.sc = 0;
+    const cap = s.b[m.to] || (m.ep ? P : 0);
+    if(cap) m.sc = 10*VAL[Math.abs(cap)] - VAL[Math.abs(s.b[m.from])];
+    if(m.promo) m.sc += VAL[m.promo];
+  }
+  moves.sort((a,b) => b.sc - a.sc);
+  return moves;
+}
+function quiesce(s, a, be, ply){
+  const stand = evalPos(s);
+  if(stand >= be) return be;
+  if(stand > a) a = stand;
+  if(ply > 6) return a;
+  for(const m of order(s, gen(s).filter(m => s.b[m.to] || m.ep || m.promo))){
+    const u = make(s, m);
+    if(inCheck(s)){ unmake(s,m,u); continue; }
+    const sc = -quiesce(s, -be, -a, ply+1);
+    unmake(s, m, u);
+    if(sc >= be) return be;
+    if(sc > a) a = sc;
+  }
+  return a;
+}
+function negamax(s, depth, a, be, ply){
+  const moves = legal(s);
+  if(!moves.length) return inCheck(s) ? -MATE + ply : 0;
+  if(s.half >= 100) return 0;
+  if(depth <= 0) return quiesce(s, a, be, 0);
+  let best = -MATE*2;
+  for(const m of order(s, moves)){
+    const u = make(s, m);
+    const sc = -negamax(s, depth-1, -be, -a, ply+1);
+    unmake(s, m, u);
+    if(sc > best) best = sc;
+    if(sc > a) a = sc;
+    if(a >= be) break;
+  }
+  return best;
+}
+function search(s, depth){
+  const moves = legal(s);
+  if(!moves.length) return null;
+  let best = null, bestSc = -MATE*2;
+  for(const m of order(s, moves)){
+    const u = make(s, m);
+    const sc = -negamax(s, depth-1, -MATE*2, MATE*2, 1) + Math.random()*4;
+    unmake(s, m, u);
+    if(sc > bestSc){ bestSc = sc; best = m; }
+  }
+  return {move: best, score: bestSc};
+}
+
+const FILES = "abcdefgh";
+function san(s, m, all){
+  const t = Math.abs(s.b[m.from]);
+  let out = "";
+  if(m.castle){ out = (m.castle===1||m.castle===4) ? "O-O" : "O-O-O"; }
+  else {
+    const cap = s.b[m.to] || m.ep;
+    if(t===P){
+      if(cap) out = FILES[m.from&7] + "x";
+      out += FILES[m.to&7] + (1+(m.to>>4));
+      if(m.promo) out += "=" + ({2:"N",3:"B",4:"R",5:"Q"})[m.promo];
+    } else {
+      out = {2:"N",3:"B",4:"R",5:"Q",6:"K"}[t];
+      /* identity compare would count the move against itself when `all`
+         is a separate generation of the same position — compare squares */
+      const same = all.filter(x => (x.from !== m.from || x.to !== m.to)
+        && Math.abs(s.b[x.from])===t && x.to===m.to && !x.castle);
+      if(same.length){
+        const sameFile = same.some(x => (x.from&7)===(m.from&7));
+        const sameRank = same.some(x => (x.from>>4)===(m.from>>4));
+        if(!sameFile) out += FILES[m.from&7];
+        else if(!sameRank) out += (1+(m.from>>4));
+        else out += FILES[m.from&7] + (1+(m.from>>4));
+      }
+      if(cap) out += "x";
+      out += FILES[m.to&7] + (1+(m.to>>4));
+    }
+  }
+  const u = make(s, m);
+  const oppMoves = legal(s);
+  if(inCheck(s)) out += oppMoves.length ? "+" : "#";
+  unmake(s, m, u);
+  return out;
+}
+
+self.onmessage = e => {
+  const {id, cmd, fen, depth, from, to} = e.data;
+  const s = parse(fen);
+  if(cmd === "legal"){
+    const ms = legal(s);
+    postMessage({id, moves: ms.map(m => ({from:m.from, to:m.to, san: san(s,m,ms)})),
+                 check: inCheck(s)});
+  } else if(cmd === "apply"){
+    const ms = legal(s);
+    /* find the move; promotion defaults to queen */
+    let m = ms.find(x => x.from === from && x.to === to && !x.promo)
+         || ms.find(x => x.from === from && x.to === to && x.promo === Q)
+         || ms.find(x => x.from === from && x.to === to);
+    if(!m){ postMessage({id, none:true}); return; }
+    const theSan = san(s, m, ms);
+    const u = make(s, m);
+    postMessage({id, san: theSan, fen: toFEN(s)});
+  } else if(cmd === "search"){
+    const r = search(s, depth);
+    if(!r){ postMessage({id, none:true}); return; }
+    const ms = legal(s);
+    const theSan = san(s, r.move, ms);
+    const u = make(s, r.move);
+    const fenAfter = toFEN(s);
+    unmake(s, r.move, u);
+    postMessage({id, from:r.move.from, to:r.move.to, san: theSan,
+                 fen: fenAfter, score: r.score});
+  }
+};
+</script>
+
+<script>
+"use strict";
+/* the board is a front desk; the thinking happens next door. */
+const cv = document.getElementById("bd"), cx = cv.getContext("2d");
+const S = 80;
+const workerSrc = document.getElementById("eng").textContent;
+const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], {type:"text/javascript"})));
+const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+const GLYPH = {1:"♟",2:"♞",3:"♝",4:"♜",5:"♛",6:"♚"};
+let fen = START, youWhite = true, busy = false;
+let sel = -1, targets = [], history = [], sanList = [];
+let reqId = 0; const pending = new Map();
+
+function ask(msg){
+  return new Promise(res => {
+    const id = ++reqId;
+    pending.set(id, res);
+    worker.postMessage({id, ...msg});
+  });
+}
+worker.onmessage = e => {
+  const p = pending.get(e.data.id);
+  if(p){ pending.delete(e.data.id); p(e.data); }
+};
+
+const dSq = (df, dr) => {
+  const file = youWhite ? df : 7-df;
+  const rank = youWhite ? 7-dr : dr;
+  return rank*16 + file;
+};
+const dPos = sq => {
+  const f = sq&7, r = sq>>4;
+  return [youWhite ? f : 7-f, youWhite ? 7-r : r];
+};
+
+let _b = null, _fen = "";
+function boardOf(f){
+  if(_fen !== f){
+    _b = new Int8Array(128);
+    const pos = f.split(" ")[0], rows = pos.split("/");
+    for(let row=0; row<8; row++){
+      const r = 7-row; let fl = 0;
+      for(const ch of rows[row]){
+        if(ch >= "1" && ch <= "8"){ fl += +ch; continue; }
+        const t = {p:1,n:2,b:3,r:4,q:5,k:6}[ch.toLowerCase()];
+        _b[r*16+fl] = ch === ch.toLowerCase() ? -t : t;
+        fl++;
+      }
+    }
+    _fen = f;
+  }
+  return _b;
+}
+
+function draw(){
+  cx.clearRect(0,0,640,640);
+  for(let dr=0; dr<8; dr++) for(let df=0; df<8; df++){
+    cx.fillStyle = (df+dr)%2===1 ? "#8a6d43" : "#d9c79c";
+    cx.fillRect(df*S, dr*S, S, S);
+  }
+  cx.fillStyle = "rgba(0,0,0,.35)";
+  cx.font = "11px ui-monospace,Menlo,monospace";
+  for(let i=0;i<8;i++){
+    cx.fillText("abcdefgh"[youWhite?i:7-i], i*S+4, 632);
+    cx.fillText(String(youWhite ? 8-i : i+1), 4, i*S+14);
+  }
+  if(sel >= 0){
+    const [df,dr] = dPos(sel);
+    cx.fillStyle = "rgba(166,58,36,.35)";
+    cx.fillRect(df*S, dr*S, S, S);
+    cx.fillStyle = "rgba(42,36,25,.4)";
+    for(const t of targets){
+      const [tf,tr] = dPos(t);
+      cx.beginPath();
+      cx.arc(tf*S+S/2, tr*S+S/2, 9, 0, 7);
+      cx.fill();
+    }
+  }
+  const b = boardOf(fen);
+  cx.textAlign = "center"; cx.textBaseline = "middle";
+  cx.font = "58px 'Segoe UI Symbol','Noto Sans Symbols 2',sans-serif";
+  for(let dr=0; dr<8; dr++) for(let df=0; df<8; df++){
+    const sq = dSq(df,dr), p = b[sq];
+    if(!p) continue;
+    cx.fillStyle = p > 0 ? "#fdf6e5" : "#26211a";
+    cx.shadowColor = p > 0 ? "rgba(0,0,0,.55)" : "rgba(255,255,255,.25)";
+    cx.shadowOffsetY = 2;
+    cx.fillText(GLYPH[Math.abs(p)], df*S+S/2, dr*S+S/2+3);
+    cx.shadowOffsetY = 0;
+  }
+  cx.textAlign = "left"; cx.textBaseline = "alphabetic";
+}
+
+const status = document.getElementById("status");
+const movesEl = document.getElementById("moves");
+const thinkEl = document.getElementById("think");
+
+function renderMoves(){
+  /* composed only from our own san strings */
+  let out = "";
+  for(let i=0; i<sanList.length; i+=2){
+    out += "<i>" + (i/2+1) + ".</i>" + sanList[i] +
+           (sanList[i+1] ? "  " + sanList[i+1] : "") + "<br>";
+  }
+  movesEl.innerHTML = out;
+  movesEl.scrollTop = movesEl.scrollHeight;
+}
+
+async function refresh(){
+  draw();
+  const r = await ask({cmd:"legal", fen});
+  const turn = fen.split(" ")[1];
+  const yours = turn === (youWhite?"w":"b");
+  if(!r.moves.length){
+    status.textContent = r.check
+      ? (yours ? "checkmate — the engine takes it."
+               : "checkmate — you win this one.")
+      : "stalemate — nobody wins.";
+    return;
+  }
+  status.textContent = yours ? (r.check ? "your move — you are in check." : "your move.")
+                             : "the engine is thinking.";
+  if(!yours && !busy){
+    busy = true;
+    const depth = +document.getElementById("depth").value;
+    thinkEl.textContent = "…";
+    const a = await ask({cmd:"search", fen, depth});
+    busy = false;
+    if(a.none){ status.textContent = "the engine has nothing to play."; return; }
+    thinkEl.textContent = a.san + "  (score " + (a.score/100).toFixed(2) + ")";
+    history.push(fen);
+    fen = a.fen;
+    sanList.push(a.san);
+    renderMoves();
+    refresh();
+  }
+}
+
+cv.addEventListener("pointerdown", async e => {
+  if(busy) return;
+  const rect = cv.getBoundingClientRect();
+  const df = Math.floor((e.clientX-rect.left)/rect.width*8);
+  const dr = Math.floor((e.clientY-rect.top)/rect.height*8);
+  const sq = dSq(df,dr);
+  const b = boardOf(fen);
+  const turn = fen.split(" ")[1];
+  if(turn !== (youWhite?"w":"b")) return;
+  const mine = b[sq] && (b[sq] > 0) === (turn === "w");
+  if(mine){
+    sel = sq;
+    const {moves} = await ask({cmd:"legal", fen});
+    targets = moves.filter(m => m.from === sq).map(m => m.to);
+    draw();
+  } else if(sel >= 0 && targets.includes(sq)){
+    busy = true;
+    const from = sel;
+    sel = -1; targets = []; draw();
+    const r = await ask({cmd:"apply", fen, from, to: sq});
+    busy = false;
+    if(r.none){ status.textContent = "not a legal square."; return; }
+    history.push(fen);
+    fen = r.fen;
+    sanList.push(r.san);
+    renderMoves();
+    refresh();
+  } else {
+    sel = -1; targets = []; draw();
+  }
+});
+
+document.getElementById("new").onclick = () => {
+  fen = START; history = []; sanList = []; sel = -1; targets = [];
+  youWhite = document.getElementById("side").value === "w";
+  status.textContent = "your move."; thinkEl.textContent = "";
+  renderMoves(); refresh();
+};
+document.getElementById("undo").onclick = () => {
+  if(!history.length || busy) return;
+  const playerTurn = youWhite ? "w" : "b";
+  while(history.length){
+    fen = history.pop(); sanList.pop();
+    if(fen.split(" ")[1] === playerTurn) break;
+  }
+  sel = -1; targets = []; busy = false; thinkEl.textContent = "";
+  renderMoves(); refresh();
+};
+
+refresh();
+</script>
+</body>
+</html>
