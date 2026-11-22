@@ -45,7 +45,7 @@ select{font:12px ui-monospace,Menlo,monospace;background:var(--paper);
 </head>
 <body>
 <div id="desk">
-  <div id="mast"><h1>ZVORN <b>&amp;</b> CO.</h1><div class="no">SET No. 3 — THE ENGINE PLAYS</div></div>
+  <div id="mast"><h1>ZVORN <b>&amp;</b> CO.</h1><div class="no">SET No. 3: THE ENGINE PLAYS</div></div>
   <div id="stage">
     <div id="left">
       <canvas id="bd" width="640" height="640"></canvas>
@@ -73,7 +73,7 @@ select{font:12px ui-monospace,Menlo,monospace;background:var(--paper);
 
 <script id="eng" type="text/plain">
 "use strict";
-/* engine — 0x88 board, negamax + alpha-beta + quiescence.
+/* engine: 0x88 board, negamax + alpha-beta + quiescence.
    speaks FEN in, FEN + SAN out. */
 const P=1,N=2,B=3,R=4,Q=5,K=6;
 const KN=[31,33,14,18,-31,-33,-14,-18];
@@ -372,7 +372,7 @@ function san(s, m, all){
     } else {
       out = {2:"N",3:"B",4:"R",5:"Q",6:"K"}[t];
       /* identity compare would count the move against itself when `all`
-         is a separate generation of the same position — compare squares */
+         is a separate generation of the same position; compare squares */
       const same = all.filter(x => (x.from !== m.from || x.to !== m.to)
         && Math.abs(s.b[x.from])===t && x.to===m.to && !x.castle);
       if(same.length){
@@ -450,7 +450,7 @@ function spawnWorker(){
     const p = pending.get(e.data.id);
     if(!p) return;
     pending.delete(e.data.id);
-    if(p.g !== worldGen) return;   /* stale — the world moved on */
+    if(p.g !== worldGen) return;   /* stale: the world moved on */
     p.res(e.data);
   };
 }
@@ -554,12 +554,12 @@ async function refresh(){
   const yours = turn === (youWhite?"w":"b");
   if(!r.moves.length){
     status.textContent = r.check
-      ? (yours ? "checkmate — the engine takes it."
-               : "checkmate — you win this one.")
-      : "stalemate — nobody wins.";
+      ? (yours ? "checkmate. the engine takes it."
+               : "checkmate. you win this one.")
+      : "stalemate. nobody wins.";
     return;
   }
-  status.textContent = yours ? (r.check ? "your move — you are in check." : "your move.")
+  status.textContent = yours ? (r.check ? "your move. you are in check." : "your move.")
                              : "the engine is thinking.";
   if(!yours && !busy){
     busy = true;
@@ -568,8 +568,8 @@ async function refresh(){
     const a = await ask({cmd:"search", fen, depth});
     busy = false;
     if(a.none){
-      status.textContent = a.check ? "checkmate — you win this one."
-                                   : "stalemate — nobody wins.";
+      status.textContent = a.check ? "checkmate. you win this one."
+                                   : "stalemate. nobody wins.";
       return;
     }
     thinkEl.textContent = a.san + "  (score " + (a.score/100).toFixed(2) + ")";
